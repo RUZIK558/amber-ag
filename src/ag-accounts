@@ -1,21 +1,125 @@
 #!/usr/bin/env python3
-"""Быстрое переключение Google-аккаунтов в Antigravity (Linux/GNOME keyring).
+"""Янтарь: быстрое переключение Google-аккаунтов Antigravity.
 
-Хранит локальные снимки entry из GNOME Keyring и подменяет его при переключении.
-Токены остаются только в keyring и в приватном хранилище (0700/0600).
+Linux: GNOME Keyring через secret-tool (атрибуты service=gemini, username=antigravity).
+Windows: Windows Credential Manager (target gemini:antigravity) через PowerShell P/Invoke.
+Токены остаются локально; vault — приватные файлы 0600.
 """
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
+WIN = platform.system() == "Windows"
 VAULT = os.path.expanduser("~/.gemini/antigravity-accounts")
 INDEX = os.path.join(VAULT, "index.json")
 CURRENT = os.path.join(VAULT, "current")
 LABEL = "Password for 'antigravity' on 'gemini'"
-STORAGE = os.path.expanduser("~/.config/Antigravity/app_storage.json")
+STORAGE = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
+                       "Antigravity", "app_storage.json")
+CRED_TARGETS = ["gemini:antigravity", "LegacyGeneric:gemini:antigravity", "antigravity"]
+
+PS_CRED = r'''
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class AmberCred {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+  public struct CREDENTIAL {
+    public uint Flags;
+    public uint Type;
+    public string TargetName;
+    public string Comment;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+    public uint CredentialBlobSize;
+    public IntPtr CredentialBlob;
+    public uint Persist;
+    public uint AttributeCount;
+    public IntPtr Attributes;
+    public string TargetAlias;
+    public string UserName;
+  }
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern bool CredRead(string target, uint type, uint flags, out IntPtr cred);
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern bool CredWrite(ref CREDENTIAL cred, uint flags);
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern bool CredDelete(string target, uint type, uint flags);
+  [DllImport("advapi32.dll")]
+  public static extern void CredFree(IntPtr cred);
+}
+"@
+'''
+
+
+def ps_run(script):
+    with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False, encoding="utf-8") as f:
+        f.write(PS_CRED + script)
+        path = f.name
+    try:
+        r = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                            "-File", path], capture_output=True, text=True)
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+    finally:
+        os.unlink(path)
+
+
+def win_read():
+    script = r'''
+foreach ($t in @('gemini:antigravity','LegacyGeneric:gemini:antigravity','antigravity')) {
+  $p = [IntPtr]::Zero
+  if ([AmberCred]::CredRead($t, 1, 0, [ref]$p)) {
+    $c = [Runtime.InteropServices.Marshal]::PtrToStructure($p, [type][AmberCred+CREDENTIAL])
+    $b = New-Object byte[] $c.CredentialBlobSize
+    [Runtime.InteropServices.Marshal]::Copy($c.CredentialBlob, $b, 0, $c.CredentialBlobSize)
+    [AmberCred]::CredFree($p)
+    $s = [Text.Encoding]::UTF8.GetString($b)
+    if ($s -match 'id_token_email') { Write-Output $s; exit 0 }
+    $s = [Text.Encoding]::Unicode.GetString($b)
+    if ($s -match 'id_token_email') { Write-Output $s; exit 0 }
+  }
+}
+exit 3
+'''
+    code, out, err = ps_run(script)
+    if code != 0 or not out:
+        return ""
+    return out
+
+
+def win_write(data):
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+        f.write(data.strip())
+        src = f.name
+    script = r'''
+$json = [IO.File]::ReadAllText(%s)
+foreach ($t in @('gemini:antigravity','LegacyGeneric:gemini:antigravity','antigravity')) {
+  [AmberCred]::CredDelete($t, 1, 0) | Out-Null
+}
+$b = [Text.Encoding]::UTF8.GetBytes($json)
+$ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal($b.Length)
+[Runtime.InteropServices.Marshal]::Copy($b, 0, $ptr, $b.Length)
+$c = New-Object AmberCred+CREDENTIAL
+$c.Type = 1
+$c.TargetName = 'gemini:antigravity'
+$c.CredentialBlobSize = $b.Length
+$c.CredentialBlob = $ptr
+$c.Persist = 2
+$c.UserName = 'antigravity'
+if (-not [AmberCred]::CredWrite([ref]$c, 0)) { exit 4 }
+[Runtime.InteropServices.Marshal]::FreeHGlobal($ptr)
+Write-Output 'ok'
+''' % json.dumps(src)
+    try:
+        code, out, err = ps_run(script)
+        if code != 0:
+            raise RuntimeError("CredWrite failed: " + err[:200])
+    finally:
+        os.unlink(src)
 
 
 def run_keyring(args, input_data=None):
@@ -24,17 +128,33 @@ def run_keyring(args, input_data=None):
 
 
 def read_keyring():
+    if WIN:
+        return win_read()
     return run_keyring(["lookup", "service", "gemini", "username", "antigravity"]).strip()
 
 
 def write_keyring(data):
-    # В GNOME Keyring может быть несколько записей с service=gemini;
+    if WIN:
+        win_write(data)
+        if not win_read():
+            raise RuntimeError("ключ не найден после записи в Credential Manager")
+        return
+    # В GNOME Keyring могут быть несколько записей с service=gemini;
     # store создаёт новую, а lookup возвращает старую — поэтому сначала чистим.
     run_keyring(["clear", "service", "gemini"])
     run_keyring(["store", "--label", LABEL, "service", "gemini", "username", "antigravity"],
                 data.strip() + "\n")
     if not run_keyring(["lookup", "service", "gemini", "username", "antigravity"]).strip():
         raise RuntimeError("ключ не найден после записи в GNOME Keyring")
+
+
+def clear_keyring():
+    if WIN:
+        ps_run(r'''foreach ($t in @('gemini:antigravity','LegacyGeneric:gemini:antigravity','antigravity')) {
+          [AmberCred]::CredDelete($t, 1, 0) | Out-Null
+        }''')
+    else:
+        subprocess.run(["secret-tool", "clear", "service", "gemini"], check=False)
 
 
 def email_of(raw):
@@ -63,6 +183,29 @@ def slug(label):
 
 def current_label():
     return open(CURRENT).read().strip() if os.path.isfile(CURRENT) else ""
+
+
+def restart_app():
+    if WIN:
+        subprocess.run(["taskkill", "/F", "/IM", "Antigravity.exe"], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)
+        launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amber.py")
+        flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+        subprocess.Popen([sys.executable, launcher], creationflags=flags,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    for p in subprocess.run(["pgrep", "-x", "antigravity"], capture_output=True, text=True).stdout.split():
+        subprocess.run(["kill", p], check=False)
+    time.sleep(2)
+    env = dict(os.environ)
+    import glob
+    auths = sorted(glob.glob("/run/user/%d/.mutter-Xwaylandauth.*" % os.getuid()),
+                   key=os.path.getmtime, reverse=True)
+    if auths:
+        env["XAUTHORITY"] = auths[0]
+    subprocess.Popen(["gtk-launch", "antigravity"], env=env, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 def cmd_save(label):
@@ -108,8 +251,7 @@ def cmd_use(query):
     write_keyring(raw)
     email = idx[key]["email"]
     if email_of(read_keyring()) != email:
-        sys.exit("Не удалось записать аккаунт в GNOME Keyring — переключение отменено")
-    # обновляем отображаемое имя в интерфейсе
+        sys.exit("Не удалось записать аккаунт — переключение отменено")
     try:
         storage = json.load(open(STORAGE, encoding="utf-8"))
         storage["agy.onboarding.lastLoginUsername"] = email
@@ -118,17 +260,7 @@ def cmd_use(query):
         pass
     open(CURRENT, "w").write(key)
     print(f"Активен: {idx[key]['label']} ({email}). Перезапуск Antigravity…")
-    for p in subprocess.run(["pgrep", "-x", "antigravity"], capture_output=True, text=True).stdout.split():
-        subprocess.run(["kill", p], check=False)
-    time.sleep(2)
-    env = dict(os.environ)
-    import glob
-    auths = sorted(glob.glob("/run/user/%d/.mutter-Xwaylandauth.*" % os.getuid()),
-                   key=os.path.getmtime, reverse=True)
-    if auths:
-        env["XAUTHORITY"] = auths[0]
-    subprocess.Popen(["gtk-launch", "antigravity"], env=env, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL, start_new_session=True)
+    restart_app()
 
 
 def cmd_current(json_out=False):
@@ -147,25 +279,14 @@ def cmd_current(json_out=False):
 
 
 def cmd_add(label):
-    """Сохранить текущий профиль и открыть вход в другой аккаунт."""
     if not load_index():
         cmd_save("Основной")
     else:
         cmd_save("Перед добавлением")
-    subprocess.run(["secret-tool", "clear", "service", "gemini"], check=False)
+    clear_keyring()
     open(os.path.join(VAULT, "pending_add"), "w", encoding="utf-8").write(label)
     print("Вход сброшен. Войди в Antigravity другим Google-аккаунтом — он сохранится автоматически.")
-    for p in subprocess.run(["pgrep", "-x", "antigravity"], capture_output=True, text=True).stdout.split():
-        subprocess.run(["kill", p], check=False)
-    time.sleep(2)
-    env = dict(os.environ)
-    import glob
-    auths = sorted(glob.glob("/run/user/%d/.mutter-Xwaylandauth.*" % os.getuid()),
-                   key=os.path.getmtime, reverse=True)
-    if auths:
-        env["XAUTHORITY"] = auths[0]
-    subprocess.Popen(["gtk-launch", "antigravity"], env=env, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL, start_new_session=True)
+    restart_app()
 
 
 def cmd_remove(query):
@@ -186,7 +307,7 @@ def cmd_remove(query):
 def main():
     os.makedirs(VAULT, mode=0o700, exist_ok=True)
     if len(sys.argv) < 2:
-        sys.exit("Использование: ag-accounts <save|list|use|current|remove> [имя]")
+        sys.exit("Использование: ag-accounts <save|list|use|current|add|remove> [имя]")
     cmd, args = sys.argv[1], sys.argv[2:]
     json_out = "--json" in args
     args = [a for a in args if a != "--json"]

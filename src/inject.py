@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Универсальный CDP-инжектор Янтаря: русский UI + кнопки аккаунтов.
+"""Янтарь: один CDP-инжектор — русский UI, кнопки аккаунтов, мост команд.
 
-Только стандартная библиотека Python, работает на Linux и Windows.
-Файлы приложения не изменяются: всё внедряется через локальный CDP-порт.
+Только стандартная библиотека. Работает на Linux и Windows.
+Гарантирует одну копию через lock-файл и повторно внедряет оверлей,
+если страница перезагрузилась или кнопки исчезли.
 """
 import base64
 import json
@@ -18,8 +19,10 @@ PORT = int(os.environ.get("AMBER_DEBUG_PORT", "58321"))
 BASE = os.environ.get("AMBER_BASE", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OVERLAY = os.path.join(BASE, "assets", "overlay.js")
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-_bundled = os.path.join(BASE, "src", "ag-accounts")
-ACCOUNTS = _bundled if os.path.isfile(_bundled) else os.path.join(os.path.expanduser("~"), ".local", "bin", "ag-accounts")
+BUNDLED = os.path.join(BASE, "src", "ag-accounts")
+ACCOUNTS = BUNDLED if os.path.isfile(BUNDLED) else os.path.join(
+    os.path.expanduser("~"), ".local", "bin", "ag-accounts")
+LOCK = os.path.join(BASE, "injector.lock")
 
 
 class MiniWebSocket:
@@ -110,6 +113,23 @@ class MiniWebSocket:
             pass
 
 
+def single_instance():
+    """Один инжектор на установку: иначе несколько копий мешают внедрению."""
+    try:
+        fd = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        try:
+            pid = int(open(LOCK).read().strip())
+            os.kill(pid, 0)
+            return False  # живой процесс уже есть
+        except Exception:
+            os.unlink(LOCK)
+            return single_instance()
+    os.write(fd, str(os.getpid()).encode())
+    os.close(fd)
+    return True
+
+
 def targets():
     try:
         with OPENER.open(f"http://127.0.0.1:{PORT}/json/list", timeout=2) as r:
@@ -118,8 +138,13 @@ def targets():
         return []
 
 
-def connect(target):
-    path = target["webSocketDebuggerUrl"].split(f"127.0.0.1:{PORT}", 1)[-1]
+def is_app(t):
+    url = t.get("url", "")
+    return (url.startswith("https://127.0.0.1:") or "Antigravity" in t.get("title", ""))
+
+
+def connect(t):
+    path = t["webSocketDebuggerUrl"].split(f"127.0.0.1:{PORT}", 1)[-1]
     return MiniWebSocket(path)
 
 
@@ -129,16 +154,36 @@ def evaluate(ws, expression, timeout=6):
     return (res.get("result") or {}).get("value")
 
 
+def ready(ws):
+    try:
+        return evaluate(ws, "document.readyState === 'complete'") is True
+    except Exception:
+        return False
+
+
+def installed(ws):
+    try:
+        return evaluate(ws, "window.__antigravityI18nInstalled === true && "
+                            "!!document.querySelector('.amber-acc-btn')") is True
+    except Exception:
+        return False
+
+
+def inject(ws, source):
+    ws.call("Page.addScriptToEvaluateOnNewDocument", {"source": source})
+    ws.call("Runtime.evaluate", {"expression": source, "awaitPromise": False}, timeout=8)
+
+
 def account_data():
     data = {"current": {}, "profiles": []}
     try:
-        out = subprocess.check_output([ACCOUNTS, "current", "--json"], text=True, timeout=6)
-        data["current"] = json.loads(out)
+        data["current"] = json.loads(subprocess.check_output(
+            [ACCOUNTS, "current", "--json"], text=True, timeout=6))
     except Exception:
         pass
     try:
-        out = subprocess.check_output([ACCOUNTS, "list", "--json"], text=True, timeout=6)
-        data["profiles"] = json.loads(out)
+        data["profiles"] = json.loads(subprocess.check_output(
+            [ACCOUNTS, "list", "--json"], text=True, timeout=6))
     except Exception:
         pass
     return data
@@ -148,77 +193,85 @@ def run_command(cmd, label):
     try:
         subprocess.run([ACCOUNTS, cmd, label], timeout=60, check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"[Amber] команда аккаунта выполнена: {cmd} {label}", flush=True)
+        print(f"[Amber] команда аккаунта: {cmd} {label}", flush=True)
     except Exception as exc:
         print(f"[Amber] ошибка команды: {exc}", flush=True)
 
 
 def main():
+    if not single_instance():
+        print("[Amber] уже запущен другой инжектор", flush=True)
+        return
     with open(OVERLAY, "r", encoding="utf-8") as f:
         source = f.read()
-    seen = set()
     last_accounts = 0.0
+    last_try = {}
     print("[Amber] инжектор запущен", flush=True)
-    while True:
-        page = None
-        for t in targets():
-            tid = t.get("id", "")
-            if t.get("type") != "page" or not t.get("webSocketDebuggerUrl"):
-                continue
-            if page is None and "Antigravity" in t.get("title", ""):
-                page = t
-            if tid in seen:
-                continue
-            try:
-                ws = connect(t)
+    try:
+        while True:
+            page = None
+            for t in targets():
+                if t.get("type") != "page" or not is_app(t) or not t.get("webSocketDebuggerUrl"):
+                    continue
+                tid = t.get("id", "")
+                if page is None and "Antigravity" in t.get("title", ""):
+                    page = t
+                now = time.monotonic()
+                if now - last_try.get(tid, 0) < 5:
+                    continue
+                last_try[tid] = now
                 try:
-                    if evaluate(ws, "window.__antigravityI18nInstalled === true"):
-                        seen.add(tid)
-                        continue
-                    ws.call("Page.addScriptToEvaluateOnNewDocument", {"source": source})
-                    ws.call("Runtime.evaluate", {"expression": source, "awaitPromise": False},
-                            timeout=8)
-                    if evaluate(ws, "window.__antigravityI18nInstalled === true"):
-                        seen.add(tid)
-                        print(f"[Amber] перевод внедрён: {t.get('title','')[:40]}", flush=True)
-                finally:
-                    ws.close()
-            except Exception as exc:
-                print(f"[Amber] пропуск таргета: {exc}", flush=True)
+                    ws = connect(t)
+                    try:
+                        if ready(ws) and not installed(ws):
+                            inject(ws, source)
+                            if installed(ws):
+                                print(f"[Amber] интерфейс готов: {t.get('title','')[:35]}",
+                                      flush=True)
+                    finally:
+                        ws.close()
+                except Exception as exc:
+                    print(f"[Amber] пропуск таргета: {exc}", flush=True)
 
-        if page is not None:
-            try:
-                ws = connect(page)
+            if page is not None:
                 try:
-                    if time.monotonic() - last_accounts > 4:
-                        data = account_data()
-                        pending = os.path.join(os.path.expanduser("~"), ".gemini",
-                                               "antigravity-accounts", "pending_add")
-                        if os.path.isfile(pending) and data["current"].get("email"):
-                            known = {p.get("email") for p in data["profiles"]}
-                            if data["current"]["email"] not in known:
-                                label = open(pending, encoding="utf-8").read().strip()
-                                run_command("save", label)
-                                os.remove(pending)
-                                data = account_data()
-                        payload = json.dumps(data, ensure_ascii=False)
-                        ws.call("Runtime.evaluate", {
-                            "expression": "window.__amberAccountData=" + payload + ";true",
-                            "returnByValue": True,
-                        }, timeout=5)
-                        last_accounts = time.monotonic()
-                    cmd = evaluate(ws, "window.__amberCommand ? JSON.stringify(window.__amberCommand) : null")
-                    if cmd:
-                        c = json.loads(cmd)
-                        ws.call("Runtime.evaluate", {"expression": "delete window.__amberCommand"},
-                                timeout=5)
-                        if c.get("cmd") in ("use", "add") and c.get("label"):
-                            run_command(c["cmd"], c["label"])
-                finally:
-                    ws.close()
-            except Exception as exc:
-                print(f"[Amber] мост аккаунтов: {exc}", flush=True)
-        time.sleep(1.5)
+                    ws = connect(page)
+                    try:
+                        if time.monotonic() - last_accounts > 4:
+                            data = account_data()
+                            pending = os.path.join(os.path.expanduser("~"), ".gemini",
+                                                   "antigravity-accounts", "pending_add")
+                            if os.path.isfile(pending) and data["current"].get("email"):
+                                known = {p.get("email") for p in data["profiles"]}
+                                if data["current"]["email"] not in known:
+                                    label = open(pending, encoding="utf-8").read().strip()
+                                    run_command("save", label)
+                                    os.remove(pending)
+                                    data = account_data()
+                            ws.call("Runtime.evaluate", {
+                                "expression": "window.__amberAccountData=" +
+                                              json.dumps(data, ensure_ascii=False) + ";true",
+                                "returnByValue": True,
+                            }, timeout=5)
+                            last_accounts = time.monotonic()
+                        cmd = evaluate(ws, "window.__amberCommand ? "
+                                           "JSON.stringify(window.__amberCommand) : null")
+                        if cmd:
+                            c = json.loads(cmd)
+                            ws.call("Runtime.evaluate",
+                                    {"expression": "delete window.__amberCommand"}, timeout=5)
+                            if c.get("cmd") in ("use", "add") and c.get("label"):
+                                run_command(c["cmd"], c["label"])
+                    finally:
+                        ws.close()
+                except Exception as exc:
+                    print(f"[Amber] мост аккаунтов: {exc}", flush=True)
+            time.sleep(1.5)
+    finally:
+        try:
+            os.unlink(LOCK)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

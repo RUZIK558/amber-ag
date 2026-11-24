@@ -260,10 +260,13 @@
 
 /* Янтарь: кнопки «Аккаунты» внутри Antigravity. */
 (function () {
-  if (typeof document === 'undefined' || document.getElementById('amber-accounts-ui')) return;
-  var st = document.createElement('style');
-  st.id = 'amber-accounts-ui';
-  st.textContent = [
+  if (typeof document === 'undefined') return;
+  if (document.querySelector('.amber-acc-btn') && document.querySelector('.amber-acc-modal')) return;
+  var st = document.getElementById('amber-accounts-ui');
+  if (!st) {
+    st = document.createElement('style');
+    st.id = 'amber-accounts-ui';
+    st.textContent = [
     '.amber-acc-btn{position:fixed;left:14px;bottom:52px;z-index:99998;display:flex;align-items:center;gap:8px;',
     'max-width:210px;padding:7px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.10);',
     'background:rgba(255,255,255,.055);color:#e8e8e8;font:500 12px/1.2 system-ui,sans-serif;cursor:pointer;',
@@ -295,8 +298,9 @@
     '.amber-acc-input:focus{border-color:#8ab4f8}',
     '.amber-acc-addok{border:0;border-radius:12px;padding:9px 14px;background:#8ab4f8;color:#10233d;',
     'font-weight:600;cursor:pointer}'
-  ].join('\n');
-  document.head.appendChild(st);
+    ].join('\n');
+    document.head.appendChild(st);
+  }
 
   var btn = document.createElement('button');
   btn.className = 'amber-acc-btn';
@@ -358,6 +362,14 @@
     var name = (field && field.value || '').trim();
     if (name) send('add', name);
   };
-  setInterval(refresh, 1000);
+  function ensure() {
+    if (document.body && !btn.isConnected) document.body.appendChild(btn);
+    if (document.body && !modal.isConnected) document.body.appendChild(modal);
+  }
+  ensure();
+  try {
+    new MutationObserver(function () { ensure(); }).observe(document.body, { childList: true });
+  } catch (e) {}
+  setInterval(function () { ensure(); refresh(); }, 1000);
   refresh();
 })();
