@@ -254,7 +254,6 @@
     '.rounded-2xl { border-radius: 20px !important; }',
     '.rounded-t-lg { border-radius: 12px 12px 0 0 !important; }',
     '.rounded-b-lg { border-radius: 0 0 12px 12px !important; }',
-    'button, input, textarea { transition: border-radius .18s ease, box-shadow .18s ease !important; }'
   ].join('\n');
   (document.head || document.documentElement).appendChild(s);
 })();
