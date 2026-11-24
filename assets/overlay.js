@@ -261,18 +261,22 @@
 /* Янтарь: кнопки «Аккаунты» внутри Antigravity. */
 (function () {
   if (typeof document === 'undefined') return;
-  if (document.querySelector('.amber-acc-btn') && document.querySelector('.amber-acc-modal')) return;
+  if (document.querySelector('.amber-acc-btn') && document.querySelector('.amber-next-btn') && document.querySelector('.amber-acc-modal')) return;
   var st = document.getElementById('amber-accounts-ui');
   if (!st) {
     st = document.createElement('style');
     st.id = 'amber-accounts-ui';
     st.textContent = [
-    '.amber-acc-btn{position:fixed;left:14px;bottom:52px;z-index:99998;display:flex;align-items:center;gap:8px;',
+    '.amber-acc-btn{position:fixed;left:14px;bottom:84px;z-index:99998;display:flex;align-items:center;gap:8px;',
     'max-width:210px;padding:7px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.10);',
     'background:rgba(255,255,255,.055);color:#e8e8e8;font:500 12px/1.2 system-ui,sans-serif;cursor:pointer;',
     'backdrop-filter:blur(8px);transition:background .15s ease,border-color .15s ease}',
     '.amber-acc-btn:hover{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.22)}',
     '.amber-acc-dot{width:8px;height:8px;border-radius:50%;background:#8ab4f8;box-shadow:0 0 8px #8ab4f8aa;flex:none}',
+    '.amber-next-btn{position:fixed;left:14px;bottom:48px;z-index:99998;padding:5px 11px;border-radius:999px;',
+    'border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.04);color:#bbb;',
+    'font:500 11px/1.2 system-ui,sans-serif;cursor:pointer}',
+    '.amber-next-btn:hover{background:rgba(255,255,255,.10);color:#eee}',
     '#amber-acc-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
     '.amber-acc-modal{position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;',
     'background:rgba(0,0,0,.55);backdrop-filter:blur(4px)}',
@@ -306,6 +310,11 @@
   btn.className = 'amber-acc-btn';
   btn.innerHTML = '<span class="amber-acc-dot"></span><span id="amber-acc-label">Аккаунт</span>';
   document.body.appendChild(btn);
+
+  var next = document.createElement('button');
+  next.className = 'amber-next-btn';
+  next.textContent = 'Следующий аккаунт ›';
+  document.body.appendChild(next);
 
   var modal = document.createElement('div');
   modal.className = 'amber-acc-modal';
@@ -355,6 +364,7 @@
   }
 
   btn.onclick = function () { refresh(); modal.classList.add('show'); };
+  next.onclick = function () { send('next', ''); };
   modal.querySelector('.amber-acc-x').onclick = function () { modal.classList.remove('show'); };
   modal.onclick = function (e) { if (e.target === modal) modal.classList.remove('show'); };
   modal.querySelector('.amber-acc-addok').onclick = function () {
@@ -364,6 +374,7 @@
   };
   function ensure() {
     if (document.body && !btn.isConnected) document.body.appendChild(btn);
+    if (document.body && !next.isConnected) document.body.appendChild(next);
     if (document.body && !modal.isConnected) document.body.appendChild(modal);
   }
   ensure();

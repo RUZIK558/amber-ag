@@ -164,7 +164,9 @@ def ready(ws):
 def installed(ws):
     try:
         return evaluate(ws, "window.__antigravityI18nInstalled === true && "
-                            "!!document.querySelector('.amber-acc-btn')") is True
+                            "!!document.querySelector('.amber-acc-btn') && "
+                            "!!document.querySelector('.amber-next-btn') && "
+                            "!!document.querySelector('.amber-acc-modal')") is True
     except Exception:
         return False
 
@@ -260,7 +262,7 @@ def main():
                             c = json.loads(cmd)
                             ws.call("Runtime.evaluate",
                                     {"expression": "delete window.__amberCommand"}, timeout=5)
-                            if c.get("cmd") in ("use", "add") and c.get("label"):
+                            if c.get("cmd") in ("use", "add") and c.get("label") or c.get("cmd") == "next":
                                 run_command(c["cmd"], c["label"])
                     finally:
                         ws.close()

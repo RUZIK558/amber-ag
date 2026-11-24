@@ -289,6 +289,18 @@ def cmd_add(label):
     restart_app()
 
 
+def cmd_next():
+    idx = load_index()
+    keys = list(idx.keys())
+    if not keys:
+        sys.exit("Нет сохранённых аккаунтов")
+    cur = current_label()
+    i = keys.index(cur) if cur in keys else -1
+    nxt = keys[(i + 1) % len(keys)]
+    print(f"Следующий: {idx[nxt]['label']} ({idx[nxt]['email']})")
+    cmd_use(idx[nxt]["label"])
+
+
 def cmd_remove(query):
     idx = load_index()
     key = query if query in idx else slug(query)
@@ -316,6 +328,7 @@ def main():
      "use": lambda: cmd_use(" ".join(args)),
      "add": lambda: cmd_add(" ".join(args) or "Новый аккаунт"),
      "current": lambda: cmd_current(json_out),
+     "next": cmd_next,
      "remove": lambda: cmd_remove(" ".join(args))}[cmd]()
 
 
