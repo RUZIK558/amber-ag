@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Быстрое переключение Google-аккаунтов в Antigravity (Linux/GNOME keyring).
+
+Хранит локальные снимки entry из GNOME Keyring и подменяет его при переключении.
+Токены остаются только в keyring и в приватном хранилище (0700/0600).
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+VAULT = os.path.expanduser("~/.gemini/antigravity-accounts")
+INDEX = os.path.join(VAULT, "index.json")
+CURRENT = os.path.join(VAULT, "current")
+LABEL = "Password for 'antigravity' on 'gemini'"
+STORAGE = os.path.expanduser("~/.config/Antigravity/app_storage.json")
+
+
+def run_keyring(args, input_data=None):
+    return subprocess.run(["secret-tool"] + args, input=input_data,
+                          capture_output=True, text=True, check=True).stdout
+
+
+def read_keyring():
+    return run_keyring(["lookup", "service", "gemini"]).strip()
+
+
+def write_keyring(data):
+    # В GNOME Keyring может быть несколько записей с service=gemini;
+    # store создаёт новую, а lookup возвращает старую — поэтому сначала чистим.
+    run_keyring(["clear", "service", "gemini"])
+    run_keyring(["store", "--label", LABEL, "service", "gemini"], data.strip() + "\n")
+
+
+def email_of(raw):
+    d = json.loads(raw)
+    return d.get("id_token_email") or d.get("token", {}).get("email", "")
+
+
+def load_index():
+    if os.path.isfile(INDEX):
+        try:
+            return json.load(open(INDEX, encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def save_index(idx):
+    json.dump(idx, open(INDEX, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    os.chmod(INDEX, 0o600)
+
+
+def slug(label):
+    s = re.sub(r"[^a-zA-Z0-9_-]+", "-", label.lower()).strip("-")
+    return s or "account"
+
+
+def current_label():
+    return open(CURRENT).read().strip() if os.path.isfile(CURRENT) else ""
+
+
+def cmd_save(label):
+    raw = read_keyring()
+    email = email_of(raw)
+    if not email:
+        sys.exit("Не удалось определить email текущего аккаунта")
+    name = slug(label)
+    path = os.path.join(VAULT, name + ".json")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(raw.strip() + "\n")
+    os.chmod(path, 0o600)
+    idx = load_index()
+    idx[name] = {"label": label, "email": email, "file": os.path.basename(path)}
+    save_index(idx)
+    open(CURRENT, "w").write(name)
+    print(f"Сохранено: {label} ({email})")
+
+
+def cmd_list(json_out=False):
+    idx = load_index()
+    cur = current_label()
+    if json_out:
+        print(json.dumps([{"key": k, **v, "active": k == cur} for k, v in idx.items()],
+                         ensure_ascii=False))
+        return
+    if not idx:
+        print("Нет сохранённых аккаунтов. Сначала: ag-accounts save <имя>")
+        return
+    for name, info in idx.items():
+        mark = "*" if name == cur else " "
+        print(f"{mark} {info['label']:<20} {info['email']:<40} [{name}]")
+
+
+def cmd_use(query):
+    idx = load_index()
+    key = query if query in idx else slug(query)
+    if key not in idx:
+        sys.exit(f"Аккаунт не найден: {query}. Сначала ag-accounts list")
+    path = os.path.join(VAULT, idx[key]["file"])
+    with open(path, encoding="utf-8") as f:
+        raw = f.read()
+    write_keyring(raw)
+    email = idx[key]["email"]
+    if email_of(read_keyring()) != email:
+        sys.exit("Не удалось записать аккаунт в GNOME Keyring — переключение отменено")
+    # обновляем отображаемое имя в интерфейсе
+    try:
+        storage = json.load(open(STORAGE, encoding="utf-8"))
+        storage["agy.onboarding.lastLoginUsername"] = email
+        json.dump(storage, open(STORAGE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    open(CURRENT, "w").write(key)
+    print(f"Активен: {idx[key]['label']} ({email}). Перезапуск Antigravity…")
+    for p in subprocess.run(["pgrep", "-x", "antigravity"], capture_output=True, text=True).stdout.split():
+        subprocess.run(["kill", p], check=False)
+    time.sleep(2)
+    env = dict(os.environ)
+    import glob
+    auths = sorted(glob.glob("/run/user/%d/.mutter-Xwaylandauth.*" % os.getuid()),
+                   key=os.path.getmtime, reverse=True)
+    if auths:
+        env["XAUTHORITY"] = auths[0]
+    subprocess.Popen(["gtk-launch", "antigravity"], env=env, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def cmd_current(json_out=False):
+    try:
+        email = email_of(read_keyring())
+    except Exception:
+        email = ""
+    cur = current_label()
+    label = load_index().get(cur, {}).get("label", cur) if cur else ""
+    if json_out:
+        print(json.dumps({"email": email, "label": label, "key": cur}, ensure_ascii=False))
+        return
+    print(f"Текущий Google-аккаунт: {email or '(не авторизован)'}")
+    if cur:
+        print(f"Профиль: {label or cur}")
+
+
+def cmd_add(label):
+    """Сохранить текущий профиль и открыть вход в другой аккаунт."""
+    if not load_index():
+        cmd_save("Основной")
+    else:
+        cmd_save("Перед добавлением")
+    subprocess.run(["secret-tool", "clear", "service", "gemini"], check=False)
+    open(os.path.join(VAULT, "pending_add"), "w", encoding="utf-8").write(label)
+    print("Вход сброшен. Войди в Antigravity другим Google-аккаунтом — он сохранится автоматически.")
+    for p in subprocess.run(["pgrep", "-x", "antigravity"], capture_output=True, text=True).stdout.split():
+        subprocess.run(["kill", p], check=False)
+    time.sleep(2)
+    env = dict(os.environ)
+    import glob
+    auths = sorted(glob.glob("/run/user/%d/.mutter-Xwaylandauth.*" % os.getuid()),
+                   key=os.path.getmtime, reverse=True)
+    if auths:
+        env["XAUTHORITY"] = auths[0]
+    subprocess.Popen(["gtk-launch", "antigravity"], env=env, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def cmd_remove(query):
+    idx = load_index()
+    key = query if query in idx else slug(query)
+    if key not in idx:
+        sys.exit("Не найден")
+    path = os.path.join(VAULT, idx[key]["file"])
+    if os.path.isfile(path):
+        os.remove(path)
+    del idx[key]
+    save_index(idx)
+    if current_label() == key and os.path.isfile(CURRENT):
+        os.remove(CURRENT)
+    print("Удалено")
+
+
+def main():
+    os.makedirs(VAULT, mode=0o700, exist_ok=True)
+    if len(sys.argv) < 2:
+        sys.exit("Использование: ag-accounts <save|list|use|current|remove> [имя]")
+    cmd, args = sys.argv[1], sys.argv[2:]
+    json_out = "--json" in args
+    args = [a for a in args if a != "--json"]
+    {"save": lambda: cmd_save(" ".join(args) or "Без имени"),
+     "list": lambda: cmd_list(json_out),
+     "use": lambda: cmd_use(" ".join(args)),
+     "add": lambda: cmd_add(" ".join(args) or "Новый аккаунт"),
+     "current": lambda: cmd_current(json_out),
+     "remove": lambda: cmd_remove(" ".join(args))}[cmd]()
+
+
+if __name__ == "__main__":
+    main()

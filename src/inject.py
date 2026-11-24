@@ -18,7 +18,8 @@ PORT = int(os.environ.get("AMBER_DEBUG_PORT", "58321"))
 BASE = os.environ.get("AMBER_BASE", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OVERLAY = os.path.join(BASE, "assets", "overlay.js")
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-ACCOUNTS = os.path.join(os.path.expanduser("~"), ".local", "bin", "ag-accounts")
+_bundled = os.path.join(BASE, "src", "ag-accounts")
+ACCOUNTS = _bundled if os.path.isfile(_bundled) else os.path.join(os.path.expanduser("~"), ".local", "bin", "ag-accounts")
 
 
 class MiniWebSocket:
