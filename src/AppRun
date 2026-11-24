@@ -1,0 +1,4 @@
+#!/bin/sh
+HERE="$(dirname "$(readlink -f "$0")")"
+export AMBER_BASE="${AMBER_BASE:-$HOME/.local/share/AmberAG}"
+exec "$HERE/usr/python/bin/python3" "$HERE/usr/share/amber-ag/src/amber.py" "$@"
