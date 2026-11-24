@@ -288,7 +288,13 @@
     'font-weight:600;cursor:pointer}',
     '.amber-acc-add{width:100%;margin-top:12px;border:1px dashed rgba(255,255,255,.2);border-radius:12px;',
     'padding:10px;background:transparent;color:#ddd;cursor:pointer}',
-    '.amber-acc-add:hover{background:rgba(255,255,255,.06)}'
+    '.amber-acc-add:hover{background:rgba(255,255,255,.06)}',
+    '.amber-acc-addrow{display:flex;gap:8px;margin-top:12px}',
+    '.amber-acc-input{flex:1;min-width:0;border:1px solid rgba(255,255,255,.16);border-radius:12px;',
+    'padding:9px 11px;background:rgba(255,255,255,.05);color:#eee;font:inherit;outline:none}',
+    '.amber-acc-input:focus{border-color:#8ab4f8}',
+    '.amber-acc-addok{border:0;border-radius:12px;padding:9px 14px;background:#8ab4f8;color:#10233d;',
+    'font-weight:600;cursor:pointer}'
   ].join('\n');
   document.head.appendChild(st);
 
@@ -302,7 +308,7 @@
   modal.innerHTML = '<div class="amber-acc-card">' +
     '<div class="amber-acc-head"><b>Google-аккаунты</b><button class="amber-acc-x">×</button></div>' +
     '<div id="amber-acc-list"></div>' +
-    '<button class="amber-acc-add">＋ Добавить аккаунт</button>' +
+    '<div class="amber-acc-addrow"><input class="amber-acc-input" placeholder="Название аккаунта" value="Рабочий"><button class="amber-acc-addok">Добавить</button></div>' +
     '</div>';
   document.body.appendChild(modal);
 
@@ -347,8 +353,9 @@
   btn.onclick = function () { refresh(); modal.classList.add('show'); };
   modal.querySelector('.amber-acc-x').onclick = function () { modal.classList.remove('show'); };
   modal.onclick = function (e) { if (e.target === modal) modal.classList.remove('show'); };
-  modal.querySelector('.amber-acc-add').onclick = function () {
-    var name = window.prompt('Название нового Google-аккаунта', 'Рабочий');
+  modal.querySelector('.amber-acc-addok').onclick = function () {
+    var field = modal.querySelector('.amber-acc-input');
+    var name = (field && field.value || '').trim();
     if (name) send('add', name);
   };
   setInterval(refresh, 1000);
