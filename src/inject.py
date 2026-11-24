@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Универсальный CDP-инжектор русского интерфейса для Antigravity.
+"""Универсальный CDP-инжектор Янтаря: русский UI + кнопки аккаунтов.
 
-Работает на Linux и Windows, только стандартная библиотека Python.
-Не меняет файлы приложения: подключается к локальному отладочному порту
-и внедряет публичный словарь в окна/вкладки.
+Только стандартная библиотека Python, работает на Linux и Windows.
+Файлы приложения не изменяются: всё внедряется через локальный CDP-порт.
 """
 import base64
 import json
 import os
 import socket
 import struct
+import subprocess
 import sys
 import time
 import urllib.request
@@ -18,6 +18,7 @@ PORT = int(os.environ.get("AMBER_DEBUG_PORT", "58321"))
 BASE = os.environ.get("AMBER_BASE", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OVERLAY = os.path.join(BASE, "assets", "overlay.js")
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+ACCOUNTS = os.path.join(os.path.expanduser("~"), ".local", "bin", "ag-accounts")
 
 
 class MiniWebSocket:
@@ -116,43 +117,97 @@ def targets():
         return []
 
 
+def connect(target):
+    path = target["webSocketDebuggerUrl"].split(f"127.0.0.1:{PORT}", 1)[-1]
+    return MiniWebSocket(path)
+
+
+def evaluate(ws, expression, timeout=6):
+    res = ws.call("Runtime.evaluate", {"expression": expression, "returnByValue": True},
+                  timeout=timeout)
+    return (res.get("result") or {}).get("value")
+
+
+def account_data():
+    data = {"current": {}, "profiles": []}
+    try:
+        out = subprocess.check_output([ACCOUNTS, "current", "--json"], text=True, timeout=6)
+        data["current"] = json.loads(out)
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output([ACCOUNTS, "list", "--json"], text=True, timeout=6)
+        data["profiles"] = json.loads(out)
+    except Exception:
+        pass
+    return data
+
+
+def run_command(cmd, label):
+    try:
+        subprocess.run([ACCOUNTS, cmd, label], timeout=60, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"[Amber] команда аккаунта выполнена: {cmd} {label}", flush=True)
+    except Exception as exc:
+        print(f"[Amber] ошибка команды: {exc}", flush=True)
+
+
 def main():
     with open(OVERLAY, "r", encoding="utf-8") as f:
         source = f.read()
     seen = set()
+    last_accounts = 0.0
     print("[Amber] инжектор запущен", flush=True)
     while True:
+        page = None
         for t in targets():
             tid = t.get("id", "")
-            if t.get("type") not in ("page", "iframe") or not t.get("webSocketDebuggerUrl"):
+            if t.get("type") != "page" or not t.get("webSocketDebuggerUrl"):
                 continue
+            if page is None and "Antigravity" in t.get("title", ""):
+                page = t
             if tid in seen:
                 continue
             try:
-                path = t["webSocketDebuggerUrl"].split(f"127.0.0.1:{PORT}", 1)[-1]
-                ws = MiniWebSocket(path)
+                ws = connect(t)
                 try:
-                    res = ws.call("Runtime.evaluate", {
-                        "expression": "window.__antigravityI18nInstalled === true",
-                        "returnByValue": True,
-                    })
-                    if (res.get("result") or {}).get("value"):
+                    if evaluate(ws, "window.__antigravityI18nInstalled === true"):
                         seen.add(tid)
                         continue
                     ws.call("Page.addScriptToEvaluateOnNewDocument", {"source": source})
-                    ws.call("Runtime.evaluate", {"expression": source, "awaitPromise": False}, timeout=8)
-                    res = ws.call("Runtime.evaluate", {
-                        "expression": "window.__antigravityI18nInstalled === true",
-                        "returnByValue": True,
-                    })
-                    if (res.get("result") or {}).get("value"):
+                    ws.call("Runtime.evaluate", {"expression": source, "awaitPromise": False},
+                            timeout=8)
+                    if evaluate(ws, "window.__antigravityI18nInstalled === true"):
                         seen.add(tid)
                         print(f"[Amber] перевод внедрён: {t.get('title','')[:40]}", flush=True)
                 finally:
                     ws.close()
             except Exception as exc:
                 print(f"[Amber] пропуск таргета: {exc}", flush=True)
-        time.sleep(2)
+
+        if page is not None:
+            try:
+                ws = connect(page)
+                try:
+                    if time.monotonic() - last_accounts > 4:
+                        payload = json.dumps(account_data(), ensure_ascii=False)
+                        ws.call("Runtime.evaluate", {
+                            "expression": "window.__amberAccountData=" + payload + ";true",
+                            "returnByValue": True,
+                        }, timeout=5)
+                        last_accounts = time.monotonic()
+                    cmd = evaluate(ws, "window.__amberCommand ? JSON.stringify(window.__amberCommand) : null")
+                    if cmd:
+                        c = json.loads(cmd)
+                        ws.call("Runtime.evaluate", {"expression": "delete window.__amberCommand"},
+                                timeout=5)
+                        if c.get("cmd") in ("use", "add") and c.get("label"):
+                            run_command(c["cmd"], c["label"])
+                finally:
+                    ws.close()
+            except Exception as exc:
+                print(f"[Amber] мост аккаунтов: {exc}", flush=True)
+        time.sleep(1.5)
 
 
 if __name__ == "__main__":
