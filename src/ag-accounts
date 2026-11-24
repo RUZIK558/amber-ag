@@ -24,14 +24,17 @@ def run_keyring(args, input_data=None):
 
 
 def read_keyring():
-    return run_keyring(["lookup", "service", "gemini"]).strip()
+    return run_keyring(["lookup", "service", "gemini", "username", "antigravity"]).strip()
 
 
 def write_keyring(data):
     # В GNOME Keyring может быть несколько записей с service=gemini;
     # store создаёт новую, а lookup возвращает старую — поэтому сначала чистим.
     run_keyring(["clear", "service", "gemini"])
-    run_keyring(["store", "--label", LABEL, "service", "gemini"], data.strip() + "\n")
+    run_keyring(["store", "--label", LABEL, "service", "gemini", "username", "antigravity"],
+                data.strip() + "\n")
+    if not run_keyring(["lookup", "service", "gemini", "username", "antigravity"]).strip():
+        raise RuntimeError("ключ не найден после записи в GNOME Keyring")
 
 
 def email_of(raw):
