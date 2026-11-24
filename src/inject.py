@@ -190,7 +190,17 @@ def main():
                 ws = connect(page)
                 try:
                     if time.monotonic() - last_accounts > 4:
-                        payload = json.dumps(account_data(), ensure_ascii=False)
+                        data = account_data()
+                        pending = os.path.join(os.path.expanduser("~"), ".gemini",
+                                               "antigravity-accounts", "pending_add")
+                        if os.path.isfile(pending) and data["current"].get("email"):
+                            known = {p.get("email") for p in data["profiles"]}
+                            if data["current"]["email"] not in known:
+                                label = open(pending, encoding="utf-8").read().strip()
+                                run_command("save", label)
+                                os.remove(pending)
+                                data = account_data()
+                        payload = json.dumps(data, ensure_ascii=False)
                         ws.call("Runtime.evaluate", {
                             "expression": "window.__amberAccountData=" + payload + ";true",
                             "returnByValue": True,
