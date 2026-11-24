@@ -77,6 +77,12 @@
       var email = (d.current && d.current.email) || '';
       lab.textContent = email ? email.split('@')[0] : 'Войти в аккаунт';
     }
+    var profiles = Array.isArray(d.profiles) ? d.profiles : [];
+    var pos = -1;
+    for (var pi = 0; pi < profiles.length; pi++) {
+      if (profiles[pi].active || profiles[pi].key === (d.current && d.current.key)) { pos = pi; break; }
+    }
+    next.textContent = 'Следующий аккаунт ›' + (profiles.length ? '  ' + (pos + 1) + ' / ' + profiles.length : '');
     var list = document.getElementById('amber-acc-list');
     if (!list) return;
     var profiles = Array.isArray(d.profiles) ? d.profiles : [];
