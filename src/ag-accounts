@@ -241,12 +241,14 @@ def cmd_save(label):
     email = email_of(raw)
     if not email:
         sys.exit("Не удалось определить email текущего аккаунта")
-    name = unique_key(label, email)
+    idx = load_index()
+    # Один Google-аккаунт = один профиль: обновляем существующий, а не дублируем.
+    name = next((k for k, v in idx.items() if v.get("email") == email),
+                unique_key(label, email))
     path = os.path.join(VAULT, name + ".json")
     with open(path, "w", encoding="utf-8") as f:
         f.write(raw.strip() + "\n")
     os.chmod(path, 0o600)
-    idx = load_index()
     idx[name] = {"label": label, "email": email, "file": os.path.basename(path)}
     save_index(idx)
     open(CURRENT, "w").write(name)

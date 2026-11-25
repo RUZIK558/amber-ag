@@ -27,12 +27,13 @@
     '.amber-acc-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}',
     '.amber-acc-head b{font-size:15px}',
     '.amber-acc-x{border:0;background:transparent;color:#aaa;font-size:20px;cursor:pointer}',
-    '.amber-acc-row{display:flex;justify-content:space-between;align-items:center;gap:10px;',
+    '.amber-acc-row{display:flex;align-items:center;gap:8px;',
     'padding:10px 12px;margin:6px 0;border-radius:12px;background:rgba(255,255,255,.045)}',
+    '.amber-acc-info{flex:1;min-width:0;overflow:hidden}',
     '.amber-acc-row.active{background:rgba(138,180,248,.14);border:1px solid rgba(138,180,248,.35)}',
     '.amber-acc-row small{display:block;color:#999;font-size:11px}',
-    '.amber-acc-go{border:0;border-radius:9px;padding:6px 11px;background:#8ab4f8;color:#10233d;',
-    'font-weight:600;cursor:pointer}',
+    '.amber-acc-go{border:0;border-radius:9px;padding:6px 11px;min-width:70px;text-align:center;',
+    'background:#8ab4f8;color:#10233d;font-weight:600;cursor:pointer;flex:none}',
     '.amber-acc-add{width:100%;margin-top:12px;border:1px dashed rgba(255,255,255,.2);border-radius:12px;',
     'padding:10px;background:transparent;color:#ddd;cursor:pointer}',
     '.amber-acc-add:hover{background:rgba(255,255,255,.06)}',
@@ -42,7 +43,8 @@
     '.amber-acc-input:focus{border-color:#8ab4f8}',
     '.amber-acc-addok{border:0;border-radius:12px;padding:9px 14px;background:#8ab4f8;color:#10233d;',
     'font-weight:600;cursor:pointer}',
-    '.amber-acc-del{border:0;background:transparent;color:#888;font-size:18px;line-height:1;cursor:pointer;padding:2px 6px}',
+    '.amber-acc-del{width:26px;height:26px;flex:none;border:0;border-radius:8px;background:transparent;',
+    'color:#888;font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}',
     '.amber-acc-del:hover{color:#ff6b6b}'
     ].join('\n');
     document.head.appendChild(st);
@@ -97,6 +99,7 @@
       var row = document.createElement('div');
       row.className = 'amber-acc-row' + (p.active ? ' active' : '');
       var info = document.createElement('div');
+      info.className = 'amber-acc-info';
       info.innerHTML = '<b></b><small></small>';
       info.querySelector('b').textContent = p.label || p.key;
       info.querySelector('small').textContent = p.email + (p.active ? ' · сейчас' : '');
