@@ -5,6 +5,7 @@ Linux: GNOME Keyring через secret-tool (атрибуты service=gemini, us
 Windows: Windows Credential Manager (target gemini:antigravity) через PowerShell P/Invoke.
 Токены остаются локально; vault — приватные файлы 0600.
 """
+import hashlib
 import json
 import os
 import platform
@@ -177,8 +178,35 @@ def save_index(idx):
 
 
 def slug(label):
-    s = re.sub(r"[^a-zA-Z0-9_-]+", "-", label.lower()).strip("-")
-    return s or "account"
+    # \w в Python 3 включает кириллицу — русские названия не должны слипаться в один ключ.
+    s = re.sub(r"[^\w-]+", "-", label.lower(), flags=re.UNICODE).strip("-")
+    return (s or "acc")[:48]
+
+
+def unique_key(label, email):
+    base = slug(label)
+    idx = load_index()
+    if base not in idx:
+        return base
+    if idx[base].get("email") == email:
+        return base
+    h = hashlib.sha1((label + "|" + email).encode("utf-8")).hexdigest()[:6]
+    key = f"{base}-{h}"
+    n = 1
+    while key in idx and idx[key].get("email") != email:
+        n += 1
+        key = f"{base}-{h}-{n}"
+    return key
+
+
+def find_key(query):
+    idx = load_index()
+    if query in idx:
+        return query
+    for key, info in idx.items():
+        if info.get("label") == query or info.get("email") == query:
+            return key
+    return slug(query)
 
 
 def current_label():
@@ -213,7 +241,7 @@ def cmd_save(label):
     email = email_of(raw)
     if not email:
         sys.exit("Не удалось определить email текущего аккаунта")
-    name = slug(label)
+    name = unique_key(label, email)
     path = os.path.join(VAULT, name + ".json")
     with open(path, "w", encoding="utf-8") as f:
         f.write(raw.strip() + "\n")
@@ -242,7 +270,7 @@ def cmd_list(json_out=False):
 
 def cmd_use(query):
     idx = load_index()
-    key = query if query in idx else slug(query)
+    key = find_key(query)
     if key not in idx:
         sys.exit(f"Аккаунт не найден: {query}. Сначала ag-accounts list")
     path = os.path.join(VAULT, idx[key]["file"])
@@ -279,10 +307,14 @@ def cmd_current(json_out=False):
 
 
 def cmd_add(label):
-    if not load_index():
+    idx = load_index()
+    cur = current_label()
+    if not idx:
         cmd_save("Основной")
+    elif cur in idx:
+        cmd_save(idx[cur]["label"])  # обновляем текущий под его именем, не перетирая другой профиль
     else:
-        cmd_save("Перед добавлением")
+        cmd_save(f"Профиль {len(idx) + 1}")
     clear_keyring()
     open(os.path.join(VAULT, "pending_add"), "w", encoding="utf-8").write(label)
     print("Вход сброшен. Войди в Antigravity другим Google-аккаунтом — он сохранится автоматически.")
@@ -303,7 +335,7 @@ def cmd_next():
 
 def cmd_remove(query):
     idx = load_index()
-    key = query if query in idx else slug(query)
+    key = find_key(query)
     if key not in idx:
         sys.exit("Не найден")
     path = os.path.join(VAULT, idx[key]["file"])
@@ -311,8 +343,12 @@ def cmd_remove(query):
         os.remove(path)
     del idx[key]
     save_index(idx)
-    if current_label() == key and os.path.isfile(CURRENT):
-        os.remove(CURRENT)
+    if current_label() == key:
+        rest = list(idx.keys())
+        if rest:
+            open(CURRENT, "w").write(rest[0])
+        elif os.path.isfile(CURRENT):
+            os.remove(CURRENT)
     print("Удалено")
 
 
