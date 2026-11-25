@@ -301,7 +301,9 @@
     'padding:9px 11px;background:rgba(255,255,255,.05);color:#eee;font:inherit;outline:none}',
     '.amber-acc-input:focus{border-color:#8ab4f8}',
     '.amber-acc-addok{border:0;border-radius:12px;padding:9px 14px;background:#8ab4f8;color:#10233d;',
-    'font-weight:600;cursor:pointer}'
+    'font-weight:600;cursor:pointer}',
+    '.amber-acc-del{border:0;background:transparent;color:#888;font-size:18px;line-height:1;cursor:pointer;padding:2px 6px}',
+    '.amber-acc-del:hover{color:#ff6b6b}'
     ].join('\n');
     document.head.appendChild(st);
   }
@@ -363,8 +365,14 @@
       go.textContent = p.active ? 'Активен' : 'Войти';
       go.disabled = !!p.active;
       go.onclick = function () { send('use', p.label || p.key); };
+      var del = document.createElement('button');
+      del.className = 'amber-acc-del';
+      del.textContent = '×';
+      del.title = 'Удалить аккаунт';
+      del.onclick = function () { send('remove', p.label || p.key); };
       row.appendChild(info);
       row.appendChild(go);
+      row.appendChild(del);
       list.appendChild(row);
     });
   }

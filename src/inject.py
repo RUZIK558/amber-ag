@@ -262,7 +262,7 @@ def main():
                             c = json.loads(cmd)
                             ws.call("Runtime.evaluate",
                                     {"expression": "delete window.__amberCommand"}, timeout=5)
-                            if c.get("cmd") in ("use", "add") and c.get("label") or c.get("cmd") == "next":
+                            if (c.get("cmd") in ("use", "add", "remove") and c.get("label")) or c.get("cmd") == "next":
                                 run_command(c["cmd"], c["label"])
                     finally:
                         ws.close()
