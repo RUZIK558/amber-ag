@@ -45,6 +45,18 @@ chmod +x AmberAG-x86_64.AppImage
   и публичные SNI-адреса DNS-AI; при необходимости создаётся локальный CA (закрытый ключ лежит
   только в пакете и никуда не отправляется).
 
+## Правила для Antigravity (опционально)
+
+В `extras/antigravity-rules/` лежит глобальное правило, которое делает агента
+Antigravity автономнее: без лишних отказов и лекций, с полным циклом
+«код → сборка → запуск → проверка». Установка на Linux:
+
+```bash
+bash scripts/install-antigravity-rules.sh
+```
+
+Версия для Windows и описание границ — в `extras/antigravity-rules/README.md`.
+
 ## Сборка из исходников
 
 Нужны `curl`, `tar`, `7z`, `python3`, `appimagetool`. Скрипт `scripts/build.sh` скачивает
